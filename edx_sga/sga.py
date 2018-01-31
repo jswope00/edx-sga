@@ -27,7 +27,7 @@ from submissions.models import (
 from webob.response import Response
 from xblock.core import XBlock  # lint-amnesty, pylint: disable=import-error
 from xblock.exceptions import JsonHandlerError  # lint-amnesty, pylint: disable=import-error
-from xblock.fields import DateTime, Scope, String, Float, Integer  # lint-amnesty, pylint: disable=import-error
+from xblock.fields import DateTime, Scope, String, Float, Integer, Boolean  # lint-amnesty, pylint: disable=import-error
 from xblock.fragment import Fragment  # lint-amnesty, pylint: disable=import-error
 from xblockutils.studio_editable import StudioEditableXBlockMixin
 from xmodule.util.duedate import get_extended_due_date  # lint-amnesty, pylint: disable=import-error
@@ -48,6 +48,12 @@ from edx_sga.utils import (
     get_file_storage_path,
     file_contents_iter,
 )
+
+from xmodule.modulestore.django import modulestore
+from django.contrib.auth.models import User
+from django.core.mail import send_mail
+from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
+from django.http import Http404, HttpResponse, HttpResponseServerError, HttpResponseRedirect
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +82,7 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
     has_score = True
     icon_class = 'problem'
     STUDENT_FILEUPLOAD_MAX_SIZE = 4 * 1000 * 1000  # 4 MB
-    editable_fields = ('display_name', 'points', 'weight', 'showanswer', 'solution')
+    editable_fields = ('display_name', 'points', 'weight', 'showanswer', 'solution', 'confirmation_email')
 
     display_name = String(
         display_name=_("Display Name"),
@@ -144,6 +150,13 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
         scope=Scope.user_state,
         default=None,
         help=_("When the annotated file was uploaded")
+    )
+
+    confirmation_email = Boolean(
+        display_name="Confirmation E-mail",
+        help="Send Confirmation E-mail?",
+        scope=Scope.settings,
+        default=False
     )
 
     @classmethod
@@ -218,6 +231,76 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
                     400, 'Weight must be a positive decimal number'
                 )
         self.weight = weight
+        self.confirmation_email = data.get('confirmation_email', self.confirmation_email)
+
+    def get_course_name(self):
+
+        course = self.scope_ids.usage_id.course_key
+	course_name = modulestore().get_course(course).display_name
+	return course_name
+
+    def get_user_email(self):
+
+	user_id = self.scope_ids.user_id
+        current_username = User.objects.get(id=user_id)
+        email = current_username.email
+	return email
+
+    def get_subsection_name(self):
+
+        vertical_location = modulestore().get_parent_location(self.location)
+        sequential_location = modulestore().get_parent_location(vertical_location)
+        course = modulestore().get_course(self.scope_ids.usage_id.course_key)
+        for section in course.get_children():
+            for subsection in section.get_children():
+                if subsection.location == sequential_location:
+                    subsection_name = subsection.display_name
+	return subsection_name
+
+    def get_upload_date_and_time(self):
+
+	submission = self.get_submission()
+        upload_date = submission['created_at'].strftime('%d, %b %Y %H:%M')
+	return upload_date
+
+    def get_upload_name(self):
+
+        data = self.student_state()
+        upload_name = data['uploaded']['filename']
+	return upload_name
+
+    def generate_receipt_submission(self):
+        """
+        This is to generate the email populated with the course name, subsection name, date and time of upload
+        and upload name.
+        """
+	from_address = configuration_helpers.get_value(
+            'email_from_address',
+            settings.DEFAULT_FROM_EMAIL
+        )
+	email_to_add = self.get_user_email()
+
+	course_name = self.get_course_name()
+	date = self.get_upload_date_and_time()
+	upload_name = self.get_upload_name()
+	subsection_name = self.get_subsection_name()
+
+	subject = "Online SGU - Receipt of Submission"
+
+	message = "This is to acknowledge receipt of an item. Details below: \n \n"
+	message += "Course Name: "+course_name+"\n"
+	message += "Section: "+subsection_name+"\n"
+	message += "Date: "+date+"\n"
+	message += "Upload Name: "+upload_name+"\n \n"
+	message += "Please keep this e-mail for your records."
+
+	send_mail(subject, message, from_address, [email_to_add], fail_silently=False)
+
+	resp = {'msg':'success'}
+        return HttpResponse(json.dumps({
+            'result': resp
+        }), content_type="text/plain")
+
 
     @XBlock.handler
     def upload_assignment(self, request, suffix=''):
@@ -244,6 +327,10 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
         path = self.file_storage_path(sha1, upload.file.name)
         if not default_storage.exists(path):
             default_storage.save(path, File(upload.file))
+	if self.confirmation_email:
+	    submission = self.get_submission()
+	    if submission:
+	        self.generate_receipt_submission()
         return Response(json_body=self.student_state())
 
     @XBlock.handler
