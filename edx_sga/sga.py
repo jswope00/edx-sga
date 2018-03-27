@@ -75,7 +75,7 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
     """
     has_score = True
     icon_class = 'problem'
-    STUDENT_FILEUPLOAD_MAX_SIZE = 4 * 1000 * 1000  # 4 MB
+    STUDENT_FILEUPLOAD_MAX_SIZE = 8 * 1000 * 1000  # 4 MB
     editable_fields = ('display_name', 'points', 'weight', 'showanswer', 'solution')
 
     display_name = String(
@@ -778,9 +778,7 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
                     'username': student_module.student.username,
                     'fullname': student_module.student.profile.name,
                     'filename': submission['answer']["filename"],
-                    'timestamp': submission['created_at'].strftime(
-                        DateTime.DATETIME_FORMAT
-                    ),
+                    'timestamp': submission['created_at'].astimezone(pytz.timezone('America/Grenada')).strftime('%Y-%m-%d %H:%M:%S %Z'),
                     'score': score,
                     'approved': approved,
                     'needs_approval': instructor and needs_approval,
