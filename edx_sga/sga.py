@@ -327,10 +327,6 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
         path = self.file_storage_path(sha1, upload.file.name)
         if not default_storage.exists(path):
             default_storage.save(path, File(upload.file))
-	if self.confirmation_email:
-	    submission = self.get_submission()
-	    if submission:
-	        self.generate_receipt_submission()
         return Response(json_body=self.student_state())
 
     @XBlock.handler
@@ -348,6 +344,9 @@ class StaffGradedAssignmentXBlock(StudioEditableXBlockMixin, ShowAnswerXBlockMix
             submission.answer['finalized'] = True
             submission.submitted_at = django_now()
             submission.save()
+        # send receipt email
+        if self.confirmation_email and submission_data:
+            self.generate_receipt_submission()
         return Response(json_body=self.student_state())
 
     @XBlock.handler
